@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Подача отопления — Восточное Дегунино</title>
+<style>
+  html, body { height: 100%; margin: 0; font-family: Arial, sans-serif; }
+  #bar { position: absolute; z-index: 10; top: 10px; left: 10px; right: 60px; max-width: 340px;
+         background: #fff; border-radius: 8px; padding: 10px 12px; box-shadow: 0 2px 8px rgba(0,0,0,.25); font-size: 14px; }
+  #bar b { font-size: 15px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 4px 0 10px; }
+  #upd { color: #777; font-size: 12px; margin-top: 4px; }
+  #map { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>Подача отопления</b><br>
+  <span id="count">Загрузка…</span><br>
+  <span class="dot" style="background:#1bad03;margin-left:0"></span>подано
+  <span class="dot" style="background:#e6261f"></span>не подано
+  <div id="upd"></div>
+</div>
+<div id="map"></div>
+
+<script>
+// ===== НАСТРОЙКИ =====
+const YANDEX_API_KEY = "e697132a-b943-414a-bf6d-cbb2c4cb1506";
+// Google Таблицы: Файл → Поделиться → Опубликовать в интернете → лист «Общее» → CSV
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZTdEPS3KycUSFLposcW6TqfYI-KhKXxqxJUTzRZS7_C1nvx5aqe-BGje8ZgT_psEhM7rhJE_dK-ep/pub?gid=0&single=true&output=csv";
+const REFRESH_MINUTES = 5;
+// ======================
+
+function parseCSV(text) {
+  const rows = []; let row = [], cell = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') q = false;
+      else cell += c;
+    } else if (c === '"') q = true;
+    else if (c === ",") { row.push(cell); cell = ""; }
+    else if (c === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; }
+    else if (c !== "\r") cell += c;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+let map, objects = [];
+
+async function load() {
+  const res = await fetch(SHEET_CSV_URL + (SHEET_CSV_URL.includes("?") ? "&" : "?") + "t=" + Date.now());
+  const rows = parseCSV(await res.text());
+  const h = rows[0].map(s => s.trim());
+  const col = name => h.indexOf(name);
+  const iAddr = col("Адрес"), iSec = col("Участок"), iOds = col("ОДС"),
+        iSt = col("Подача отопления"), iLat = col("Широта"), iLon = col("Долгота");
+  if ([iAddr, iSt, iLat, iLon].includes(-1)) throw new Error("Не найдены колонки Адрес / Подача отопления / Широта / Долгота");
+
+  objects.forEach(o => map.geoObjects.remove(o));
+  objects = [];
+  let yes = 0, total = 0, noCoords = 0;
+
+  rows.slice(1).forEach(r => {
+    if (!r[iAddr]) return;
+    total++;
+    const lat = parseFloat((r[iLat] || "").replace(",", ".")), lon = parseFloat((r[iLon] || "").replace(",", "."));
+    if (isNaN(lat) || isNaN(lon)) { noCoords++; return; }
+    const ok = (r[iSt] || "").trim() === "Да";
+    if (ok) yes++;
+    const pm = new ymaps.Placemark([lat, lon], {
+      hintContent: r[iAddr],
+      balloonContentHeader: r[iAddr],
+      balloonContentBody: "Отопление подано: <b>" + (ok ? "да" : "нет") + "</b>" +
+        (iSec >= 0 ? "<br>Участок: " + r[iSec] : "") + (iOds >= 0 ? "<br>ОДС: " + r[iOds] : "")
+    }, { preset: ok ? "islands#greenCircleDotIcon" : "islands#redCircleDotIcon" });
+    map.geoObjects.add(pm);
+    objects.push(pm);
+  });
+
+  document.getElementById("count").textContent =
+    "Подано: " + yes + " из " + total + (noCoords ? " (без координат: " + noCoords + ")" : "");
+  document.getElementById("upd").textContent =
+    "Обновлено " + new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
+function start() {
+  ymaps.ready(() => {
+    map = new ymaps.Map("map", { center: [55.875, 37.565], zoom: 14, controls: ["zoomControl", "fullscreenControl"] });
+    const run = () => load().catch(e => { document.getElementById("count").textContent = "Ошибка: " + e.message; });
+    run();
+    setInterval(run, REFRESH_MINUTES * 60 * 1000);
+  });
+}
+
+const s = document.createElement("script");
+s.src = "https://api-maps.yandex.ru/2.1/?apikey=" + YANDEX_API_KEY + "&lang=ru_RU";
+s.onload = start;
+document.head.appendChild(s);
+</script>
+</body>
+</html>
